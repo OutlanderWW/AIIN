@@ -2,6 +2,23 @@
 
 The detector deliberately returns plain Python values so tracking and analysis
 modules do not need to depend on Ultralytics result objects.
+
+Example::
+
+    import cv2
+    from detection import YoloPersonDetector
+
+    detector = YoloPersonDetector()
+    capture = cv2.VideoCapture("video.mp4")
+    try:
+        while capture.isOpened():
+            ok, frame = capture.read()
+            if not ok:
+                break
+            detections = detector.detect(frame)
+            tracker_input = detector.to_tracker_input(detections)
+    finally:
+        capture.release()
 """
 
 from __future__ import annotations
@@ -24,6 +41,10 @@ class Detection:
     confidence: float
     class_id: int
     label: str = "person"
+
+    def to_tracker_row(self) -> tuple[float, float, float, float, float, int]:
+        """Return ``x1, y1, x2, y2, confidence, class_id`` for a tracker."""
+        return (*self.bbox, self.confidence, self.class_id)
 
 
 class YoloPersonDetector:
@@ -89,13 +110,51 @@ class YoloPersonDetector:
         if not results:
             return []
 
-        boxes = results[0].boxes
+        return self._convert_result(results[0])
+
+    def detect_batch(self, frames: list[ImageFrame]) -> list[list[Detection]]:
+        """Detect people in a batch of frames, preserving input order."""
+        if not frames:
+            return []
+        for frame in frames:
+            self._validate_frame(frame)
+
+        kwargs: dict[str, object] = {
+            "source": frames,
+            "conf": self.confidence,
+            "imgsz": self.image_size,
+            "classes": [self.person_class_id],
+            "verbose": False,
+        }
+        if self.device is not None:
+            kwargs["device"] = self.device
+        results = self._model.predict(**kwargs)
+        return [self._convert_result(result) for result in results]
+
+    @staticmethod
+    def to_tracker_input(
+        detections: list[Detection],
+    ) -> np.ndarray:
+        """Convert detections to an ``(N, 6)`` float array.
+
+        The columns are ``x1, y1, x2, y2, confidence, class_id``. Empty
+        detections produce an array with shape ``(0, 6)``.
+        """
+        if not detections:
+            return np.empty((0, 6), dtype=np.float32)
+        return np.asarray(
+            [detection.to_tracker_row() for detection in detections],
+            dtype=np.float32,
+        )
+
+    def _convert_result(self, result: object) -> list[Detection]:
+        boxes = getattr(result, "boxes", None)
         if boxes is None or len(boxes) == 0:
             return []
 
-        xyxy = boxes.xyxy.cpu().numpy()
-        confidences = boxes.conf.cpu().numpy()
-        class_ids = boxes.cls.cpu().numpy().astype(int)
+        xyxy = self._as_numpy(boxes.xyxy)
+        confidences = self._as_numpy(boxes.conf)
+        class_ids = self._as_numpy(boxes.cls).astype(int)
         return [
             Detection(
                 bbox=(float(box[0]), float(box[1]), float(box[2]), float(box[3])),
@@ -105,6 +164,17 @@ class YoloPersonDetector:
             for box, score, class_id in zip(xyxy, confidences, class_ids)
             if int(class_id) == self.person_class_id
         ]
+
+    @staticmethod
+    def _as_numpy(value: object) -> np.ndarray:
+        """Convert torch tensors or array-like values to NumPy."""
+        if hasattr(value, "detach"):
+            value = value.detach()
+        if hasattr(value, "cpu"):
+            value = value.cpu()
+        if hasattr(value, "numpy"):
+            value = value.numpy()
+        return np.asarray(value)
 
     @staticmethod
     def _validate_frame(frame: ImageFrame) -> None:
