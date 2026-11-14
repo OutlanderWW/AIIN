@@ -21,7 +21,7 @@ def draw_detections(frame: np.ndarray, detections: list[Detection]) -> np.ndarra
         cv2.putText(
             output,
             caption,
-            (x1, max(20, y1 - 8)),
+            (x1, max(20, y1 - 8)), 
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
             (40, 220, 40),

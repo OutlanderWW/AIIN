@@ -22,20 +22,38 @@ class MotionHeatmap:
         self,
         frame_size: tuple[int, int],
         *,
-        blur_kernel: int = 51,
-        radius: int = 12,
+        blur_kernel: int | None = None,
+        radius: int | None = None,
+        decay: float = 1.0,
+        min_visible: float = 0.04,
     ) -> None:
         """Create a heatmap for ``(width, height)`` frames.
 
-        ``blur_kernel`` is rounded up to an odd number as required by OpenCV.
+        ``blur_kernel`` and ``radius`` default to values proportional to the
+        frame size (so 640p and 1080p videos look alike); the kernel is
+        rounded up to an odd number as required by OpenCV.
+
+        ``decay`` < 1 makes old activity fade (``decay_step`` multiplies the
+        map once per frame), e.g. 0.995 ~ "last few seconds". ``min_visible``
+        hides values below this fraction of the maximum so that the video is
+        not covered by a blue halo.
         """
         width, height = frame_size
         if width <= 0 or height <= 0:
             raise ValueError("frame_size dimensions must be greater than 0")
+        scale = min(width, height)
+        if blur_kernel is None:
+            blur_kernel = max(15, int(scale * 0.06))
+        if radius is None:
+            radius = max(3, int(scale * 0.008))
         if blur_kernel <= 0:
             raise ValueError("blur_kernel must be greater than 0")
         if radius < 0:
             raise ValueError("radius cannot be negative")
+        if not 0.0 < decay <= 1.0:
+            raise ValueError("decay must be in (0, 1]")
+        self.decay = decay
+        self.min_visible = min_visible
 
         self.width = width
         self.height = height
@@ -86,6 +104,25 @@ class MotionHeatmap:
                 raise TypeError("each track must expose bbox=(x1, y1, x2, y2)") from exc
             self.add_point((x1 + x2) / 2.0, y2)
 
+    def decay_step(self) -> None:
+        """Fade accumulated activity by ``decay`` (call once per frame)."""
+        if self.decay < 1.0:
+            self._accumulator *= self.decay
+
+    def colorized(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return ``(BGR colour map, visibility mask)`` of the blurred heatmap."""
+        blurred = cv2.GaussianBlur(
+            self._accumulator,
+            (self.blur_kernel, self.blur_kernel),
+            sigmaX=0,
+        )
+        peak = float(blurred.max())
+        if peak <= 0:
+            return np.zeros((self.height, self.width, 3), np.uint8), np.zeros((self.height, self.width), bool)
+        normalized = np.clip(blurred / peak * 255.0, 0, 255).astype(np.uint8)
+        colored = cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+        return colored, blurred > peak * self.min_visible
+
     def render(self, frame: np.ndarray, *, alpha: float = 0.55) -> np.ndarray:
         """Return a BGR frame with the normalized heatmap blended on top.
 
@@ -97,15 +134,8 @@ class MotionHeatmap:
         if not np.any(self._accumulator):
             return frame.copy()
 
-        blurred = cv2.GaussianBlur(
-            self._accumulator,
-            (self.blur_kernel, self.blur_kernel),
-            sigmaX=0,
-        )
-        normalized = cv2.normalize(blurred, None, 0, 255, cv2.NORM_MINMAX)
-        colored = cv2.applyColorMap(normalized.astype(np.uint8), cv2.COLORMAP_JET)
+        colored, mask = self.colorized()
         # Hide the near-zero background so untouched areas retain the video.
-        mask = blurred > 0
         output = frame.copy()
         if np.any(mask):
             blended = cv2.addWeighted(frame, 1.0 - alpha, colored, alpha, 0)
@@ -114,15 +144,7 @@ class MotionHeatmap:
 
     def save(self, path: str | Path) -> None:
         """Save the current heatmap visualization as a PNG or other image."""
-        blurred = cv2.GaussianBlur(
-            self._accumulator,
-            (self.blur_kernel, self.blur_kernel),
-            sigmaX=0,
-        )
-        normalized = cv2.normalize(blurred, None, 0, 255, cv2.NORM_MINMAX)
-        colored = cv2.applyColorMap(normalized.astype(np.uint8), cv2.COLORMAP_JET)
-        if not np.any(self._accumulator):
-            colored[:] = 0
+        colored, _ = self.colorized()
         if not cv2.imwrite(str(path), colored):
             raise OSError(f"could not save heatmap to {path}")
 
