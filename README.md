@@ -44,13 +44,6 @@ Każde uruchomienie tworzy folder w `data/results/` z plikami `stats.csv` (staty
 `events.csv` (przejścia przez linię, wejścia/wyjścia ze stref), `tracks.csv` (pełna historia śladów),
 `heatmap.png`, `heatmap_overlay.png`, `summary.json`.
 
-## Testy
-
-```
-python -m unittest discover -s tests -t .
-```
-
-Testy nie wymagają modelu YOLO – pipeline jest testowany z „trackerem” zwracającym zadane ślady.
 
 ## Struktura
 
