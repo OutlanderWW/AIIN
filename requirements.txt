@@ -4,3 +4,4 @@ ultralytics
 lap>=0.5.12
 pandas
 matplotlib
+streamlit>=1.53,<2

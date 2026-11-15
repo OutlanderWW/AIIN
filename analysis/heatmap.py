@@ -60,6 +60,9 @@ class MotionHeatmap:
         self.blur_kernel = blur_kernel if blur_kernel % 2 else blur_kernel + 1
         self.radius = radius
         self._accumulator = np.zeros((height, width), dtype=np.float32)
+        diameter = 2 * radius + 1
+        self._stamp = np.zeros((diameter, diameter), dtype=np.float32)
+        cv2.circle(self._stamp, (radius, radius), radius, 1.0, thickness=-1)
 
     @property
     def accumulator(self) -> np.ndarray:
@@ -72,14 +75,12 @@ class MotionHeatmap:
             raise ValueError("weight must be greater than 0")
         px, py = int(round(x)), int(round(y))
         if 0 <= px < self.width and 0 <= py < self.height:
-            cv2.circle(
-                self._accumulator,
-                (px, py),
-                self.radius,
-                float(weight),
-                thickness=-1,
-                lineType=cv2.LINE_8,
-            )
+            left, top = px - self.radius, py - self.radius
+            x1, y1 = max(0, left), max(0, top)
+            x2 = min(self.width, px + self.radius + 1)
+            y2 = min(self.height, py + self.radius + 1)
+            stamp = self._stamp[y1 - top:y2 - top, x1 - left:x2 - left]
+            self._accumulator[y1:y2, x1:x2] += stamp * weight
 
     def add_detections(self, detections: list[Detection]) -> None:
         """Accumulate bottom-center positions from detector output."""

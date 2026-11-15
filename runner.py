@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -108,29 +109,23 @@ def run(
     ``on_start`` receives the pipeline after the first frame; ``on_frame``
     gets every annotated frame and may return ``False`` to stop early.
     """
-    source = int(config.source) if str(config.source).isdecimal() else config.source
-    capture = cv2.VideoCapture(str(source) if isinstance(source, Path) else source)
-    if not capture.isOpened():
-        capture.release()
-        raise RuntimeError(f"could not open video source: {config.source}")
-    is_file = isinstance(source, (str, Path)) and Path(source).exists()
-    fps = capture.get(cv2.CAP_PROP_FPS)
-    if not np.isfinite(fps) or fps <= 0:
-        fps = 25.0
-    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) if is_file else None
-    if config.max_frames:
-        total = min(total or config.max_frames, config.max_frames)
-
-    tracker = PersonTracker(
-        config.model,
-        tracker=config.tracker,
-        confidence=config.confidence,
-        image_size=config.image_size,
-        device=config.device,
-    )
-    name = Path(source).stem if is_file else f"camera{source}"
-    run_dir = Path(config.results_dir) / f"{name}_{Path(config.tracker).stem}_{datetime.now():%Y%m%d_%H%M%S}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    source = config.source
+    if isinstance(source, str) and source.isdecimal():
+        source = int(source)
+    scheme = ""
+    if isinstance(source, str) and "://" in source:
+        scheme = source.partition("://")[0].lower()
+    is_rtsp = scheme in {"rtsp", "rtsps"}
+    is_file = not scheme and isinstance(source, (str, Path)) and Path(source).is_file()
+    source_label = str(source)
+    if scheme:
+        source_label = "RTSP" if is_rtsp else "stream"
+        name = source_label.lower()
+    elif isinstance(source, int):
+        name = f"camera{source}"
+    else:
+        name = Path(source).stem
+    capture_source = str(source) if isinstance(source, Path) else source
 
     pipeline: AnalysisPipeline | None = None
     writer: cv2.VideoWriter | None = None
@@ -138,8 +133,31 @@ def run(
     event_rows: list[list] = []
     first_frame = last_frame = None
     frame_number = 0
-    started = time.perf_counter()
+    capture = cv2.VideoCapture()
     try:
+        if is_rtsp:
+            capture.open(capture_source, cv2.CAP_FFMPEG, [
+                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
+                cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000,
+            ])
+        else:
+            capture.open(capture_source)
+        if not capture.isOpened():
+            raise RuntimeError(f"could not open video source: {source_label}")
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        if not np.isfinite(fps) or fps <= 0:
+            fps = 25.0
+        total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) if is_file else None
+        if config.max_frames:
+            total = min(total or config.max_frames, config.max_frames)
+        tracker = PersonTracker(
+            config.model,
+            tracker=config.tracker,
+            confidence=config.confidence,
+            image_size=config.image_size,
+            device=config.device,
+        )
+        started = time.perf_counter()
         while config.max_frames is None or frame_number < config.max_frames:
             ok, frame = capture.read()
             if not ok:
@@ -163,6 +181,8 @@ def run(
                     writer = cv2.VideoWriter(
                         str(config.output_video), cv2.VideoWriter_fourcc(*"mp4v"), fps, size
                     )
+                    if not writer.isOpened():
+                        raise RuntimeError(f"could not create output video: {config.output_video}")
 
             timestamp = (frame_number - 1) / fps if is_file else time.perf_counter() - started
             annotated, stats, events = pipeline.process(frame, frame_number, timestamp)
@@ -191,21 +211,26 @@ def run(
     if progress:
         print()
     if pipeline is None:
-        raise RuntimeError(f"no frames could be read from {config.source}")
+        raise RuntimeError(f"no frames could be read from {source_label}")
 
     elapsed = time.perf_counter() - started
     stats_df = pd.DataFrame(stats_rows)
     events_df = pd.DataFrame(event_rows, columns=["frame", "time_s", "type", "name", "track_id", "kind"])
     tracks_df = pipeline.tracks_dataframe()
+    results_dir = Path(config.results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{name}_{Path(config.tracker).stem}_{datetime.now():%Y%m%d_%H%M%S}_"
+    run_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=results_dir))
     stats_df.to_csv(run_dir / "stats.csv", index=False)
     events_df.to_csv(run_dir / "events.csv", index=False)
     tracks_df.to_csv(run_dir / "tracks.csv", index=False)
     pipeline.heatmap.save(run_dir / "heatmap.png")
     heatmap_image = pipeline.heatmap.render(last_frame)
-    cv2.imwrite(str(run_dir / "heatmap_overlay.png"), heatmap_image)
+    if not cv2.imwrite(str(run_dir / "heatmap_overlay.png"), heatmap_image):
+        raise OSError(f"could not save heatmap overlay to {run_dir}")
 
     summary = {
-        "source": str(config.source),
+        "source": source_label,
         "tracker": config.tracker,
         "model": config.model,
         "frames": frame_number,
