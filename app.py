@@ -1,5 +1,3 @@
-"""Local Streamlit dashboard for analysing pedestrian movement."""
-
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
@@ -19,8 +17,6 @@ from videos import TEST_VIDEOS, VIDEOS_DIR
 
 
 class AnalysisJob:
-    """Keep inference off the Streamlit script thread and publish the latest frame."""
-
     def __init__(self, config: RunConfig, upload: bytes | None = None) -> None:
         self.result: Future[RunResult] = Future()
         self.stop = Event()
@@ -37,7 +33,6 @@ class AnalysisJob:
     def _on_frame(self, frame: np.ndarray, stats: FrameStats) -> bool:
         with self._lock:
             self._latest = frame, stats
-            # Release a live source if the browser stops refreshing the dashboard.
             return not self.stop.is_set() and monotonic() - self._last_refresh < 30
 
     def _run(self, config: RunConfig, upload: bytes | None) -> None:

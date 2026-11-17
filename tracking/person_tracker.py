@@ -24,7 +24,7 @@ from detection.yolo_detector import Box, ImageFrame, YoloPersonDetector
 Point: TypeAlias = tuple[float, float]
 
 TRACKER_CONFIGS = {
-    "bytetrack": "bytetrack.yaml",
+    "bytetrack": str(Path(__file__).resolve().with_name("bytetrack.yaml")),
     "botsort": "botsort.yaml",
 }
 
@@ -68,7 +68,7 @@ class PersonTracker:
 
     def __init__(
         self,
-        model_path: str | Path = "yolo26n.pt",
+        model_path: str | Path = "yolo26s.pt",
         *,
         tracker: str = "bytetrack",
         confidence: float = 0.1,

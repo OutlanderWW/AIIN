@@ -23,21 +23,47 @@ def color_for_id(track_id: int) -> Color:
     return int(b * 255), int(g * 255), int(r * 255)
 
 
-def _label(frame: np.ndarray, text: str, origin: tuple[int, int], color: Color) -> None:
-    (tw, th), baseline = cv2.getTextSize(text, _FONT, 0.5, 1)
+def _label(
+    frame: np.ndarray,
+    text: str,
+    origin: tuple[int, int],
+    color: Color,
+    *,
+    font_scale: float = 0.5,
+    thickness: int = 1,
+) -> None:
+    height, width = frame.shape[:2]
+    padding = max(2, round(font_scale * 3))
+    (tw, th), baseline = cv2.getTextSize(text, _FONT, font_scale, thickness)
+    if tw + 2 * padding > width:
+        font_scale *= max(1, width - 4) / max(1, tw)
+        padding = 2
+        thickness = 1
+        (tw, th), baseline = cv2.getTextSize(text, _FONT, font_scale, thickness)
+    label_width = tw + 2 * padding
+    label_height = th + baseline + 2 * padding
     x, y = origin
-    y = max(th + baseline + 2, y)
-    cv2.rectangle(frame, (x, y - th - baseline - 2), (x + tw + 4, y), color, -1)
-    cv2.putText(frame, text, (x + 2, y - baseline), _FONT, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+    x = max(0, min(x, width - label_width))
+    y = max(label_height, min(y, height))
+    cv2.rectangle(frame, (x, y - label_height), (x + label_width, y), color, -1)
+    cv2.putText(
+        frame, text, (x + padding, y - baseline - padding),
+        _FONT, font_scale, (0, 0, 0), thickness, cv2.LINE_AA,
+    )
 
 
 def draw_tracks(frame: np.ndarray, tracks: Iterable[Track]) -> np.ndarray:
     """Bounding box, ID label and anchor point for every track."""
+    font_scale = max(0.9, frame.shape[1] / 960 * 0.9)
+    thickness = max(2, round(font_scale * 1.5))
     for track in tracks:
         color = color_for_id(track.track_id)
         x1, y1, x2, y2 = (int(round(v)) for v in track.bbox)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        _label(frame, f"ID {track.track_id} {track.confidence:.2f}", (x1, y1), color)
+        _label(
+            frame, f"ID {track.track_id}", (x1, y1), color,
+            font_scale=font_scale, thickness=thickness,
+        )
         ax, ay = track.anchor
         cv2.circle(frame, (int(ax), int(ay)), 4, color, -1)
     return frame

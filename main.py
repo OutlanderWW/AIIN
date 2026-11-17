@@ -26,7 +26,7 @@ from tracking import TRACKER_CONFIGS
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Detect, track and analyse people in video")
     parser.add_argument("source", help="Video path, camera index (e.g. 0) or stream URL")
-    parser.add_argument("--model", default="yolo26n.pt", help="Model name or weights path")
+    parser.add_argument("--model", default="yolo26s.pt", help="Model name or weights path")
     parser.add_argument(
         "--tracker", default="bytetrack", help=f"{' / '.join(TRACKER_CONFIGS)} or a tracker YAML"
     )

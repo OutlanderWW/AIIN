@@ -16,7 +16,8 @@ użyć nagrania testowego z gotową linią i strefą, wybrać lokalną kamerę l
 Kamera lokalna musi być podłączona do komputera uruchamiającego Streamlit.
 Podczas analizy widać obraz z adnotacjami, bieżące liczniki i FPS. Po zakończeniu
 lub ręcznym zatrzymaniu dostępne są mapa cieplna, wykres liczby osób w czasie i pliki CSV.
-Przy pierwszym uruchomieniu Ultralytics pobierze model `yolo26n.pt` (~5 MB).
+Domyślna konfiguracja to model `yolo26s.pt` i ByteTrack z `match_thresh: 0.8`
+oraz `fuse_score: True`. Przy pierwszym uruchomieniu Ultralytics pobierze wagi modelu (~20 MB).
 
 Notebook **`demo.ipynb`** zawiera analizę trzech nagrań, wykresy kierunków i prędkości
 oraz porównanie ByteTrack z BoT-SORT.

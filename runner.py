@@ -71,7 +71,7 @@ def parse_zone(text: str, frame_size: tuple[int, int], index: int) -> Zone:
 class RunConfig:
     source: str | int | Path  # video path, camera index or stream URL
     tracker: str = "bytetrack"  # "bytetrack", "botsort" or a tracker YAML path
-    model: str = "yolo26n.pt"
+    model: str = "yolo26s.pt"
     confidence: float = 0.1
     image_size: int = 640
     device: str | None = None
