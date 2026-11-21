@@ -1,12 +1,13 @@
 """Per-frame processing: tracking -> analysis -> annotated frame + statistics.
 
-The pipeline does not read video or write files; ``main.py`` (CLI) and a
-future Streamlit dashboard can both drive it frame by frame.
+The pipeline does not read video or write files; ``runner.py`` (CLI, notebook)
+and ``monitor.py`` (live view) both drive it frame by frame.
 """
 
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol, Sequence
 
@@ -71,8 +72,15 @@ class AnalysisPipeline:
         heatmap_alpha: float = 0.45,
         heatmap_decay: float = 1.0,
         record_tracks: bool = True,
+        show_stats_panel: bool = True,
+        draw_overlays: bool = True,
     ) -> None:
         self.tracker = tracker
+        self.show_stats_panel = show_stats_panel
+        # False: return the frame without boxes/zones/line (the caller draws them,
+        # e.g. the live monitor at screen resolution) - see ``last_tracks``.
+        self.draw_overlays = draw_overlays
+        self.last_tracks: list[Track] = []
         self.frame_size = frame_size
         self.trajectories = TrajectoryStore(max_length=trail_length)
         self.heatmap = MotionHeatmap(frame_size, decay=heatmap_decay)
@@ -84,12 +92,13 @@ class AnalysisPipeline:
         # Full history: (frame, track_id, x1, y1, x2, y2, confidence).
         self.track_rows: list[tuple[int, int, float, float, float, float, float]] = []
         self._fps = 0.0
-        self._last_time: float | None = None
+        self._times: deque[float] = deque(maxlen=30)  # timestamps of recent frames
 
     def process(
         self, frame: np.ndarray, frame_index: int, timestamp_s: float
     ) -> tuple[np.ndarray, FrameStats, list[Event]]:
         tracks = self.tracker.update(frame)
+        self.last_tracks = tracks
         points = tracks_to_points(tracks)
 
         if self.record_tracks:
@@ -122,11 +131,15 @@ class AnalysisPipeline:
             output = self.heatmap.render(frame, alpha=self.heatmap_alpha)
         else:
             output = frame.copy()
+        if not self.draw_overlays:
+            return output
         draw_zones(output, self.zone_monitor)
         if self.line_counter is not None:
             draw_line_counter(output, self.line_counter)
         draw_trajectories(output, self.trajectories.paths())
         draw_tracks(output, tracks)
+        if not self.show_stats_panel:
+            return output
 
         lines = [
             f"FPS: {stats.fps:.1f}",
@@ -149,11 +162,15 @@ class AnalysisPipeline:
         df["frame"] += frame_offset
         return df
 
+    def reset_fps(self) -> None:
+        """Forget the FPS history, e.g. after the source was paused."""
+        self._fps = 0.0
+        self._times.clear()
+
     def _update_fps(self) -> None:
-        now = time.perf_counter()
-        if self._last_time is not None:
-            elapsed = now - self._last_time
-            if elapsed > 0:
-                instant = 1.0 / elapsed
-                self._fps = instant if self._fps == 0 else 0.9 * self._fps + 0.1 * instant
-        self._last_time = now
+        """Frames per second over the last (up to) 30 processed frames."""
+        self._times.append(time.perf_counter())
+        if len(self._times) >= 5:
+            span = self._times[-1] - self._times[0]
+            if span > 0:
+                self._fps = (len(self._times) - 1) / span

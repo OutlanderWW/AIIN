@@ -63,6 +63,11 @@ class MotionHeatmap:
         diameter = 2 * radius + 1
         self._stamp = np.zeros((diameter, diameter), dtype=np.float32)
         cv2.circle(self._stamp, (radius, radius), radius, 1.0, thickness=-1)
+        # ``render`` recomputes the colour map only every ``refresh_every`` calls
+        # (the heatmap changes slowly; 1 = every frame, used e.g. by the live monitor).
+        self.refresh_every = 1
+        self._cache: tuple[np.ndarray, np.ndarray] | None = None
+        self._renders_since_refresh = 0
 
     @property
     def accumulator(self) -> np.ndarray:
@@ -111,12 +116,21 @@ class MotionHeatmap:
             self._accumulator *= self.decay
 
     def colorized(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return ``(BGR colour map, visibility mask)`` of the blurred heatmap."""
-        blurred = cv2.GaussianBlur(
-            self._accumulator,
-            (self.blur_kernel, self.blur_kernel),
-            sigmaX=0,
-        )
+        """Return ``(BGR colour map, visibility mask)`` of the blurred heatmap.
+
+        The large blur is computed on a 4x smaller copy and scaled back up: the
+        result looks the same (blurring removes fine detail anyway) but it is
+        many times faster, which matters when the heatmap is shown live.
+        """
+        factor = 4 if min(self.width, self.height) >= 160 else 1
+        if factor > 1:
+            small = cv2.resize(self._accumulator, (self.width // factor, self.height // factor),
+                               interpolation=cv2.INTER_AREA)
+            kernel = max(3, (self.blur_kernel // factor) | 1)
+            small = cv2.GaussianBlur(small, (kernel, kernel), sigmaX=0)
+            blurred = cv2.resize(small, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+        else:
+            blurred = cv2.GaussianBlur(self._accumulator, (self.blur_kernel, self.blur_kernel), sigmaX=0)
         peak = float(blurred.max())
         if peak <= 0:
             return np.zeros((self.height, self.width, 3), np.uint8), np.zeros((self.height, self.width), bool)
@@ -135,12 +149,16 @@ class MotionHeatmap:
         if not np.any(self._accumulator):
             return frame.copy()
 
-        colored, mask = self.colorized()
+        if self._cache is None or self._renders_since_refresh >= self.refresh_every - 1:
+            self._cache, self._renders_since_refresh = self.colorized(), 0
+        else:
+            self._renders_since_refresh += 1
+        colored, mask = self._cache
         # Hide the near-zero background so untouched areas retain the video.
         output = frame.copy()
         if np.any(mask):
             blended = cv2.addWeighted(frame, 1.0 - alpha, colored, alpha, 0)
-            output[mask] = blended[mask]
+            cv2.copyTo(blended, mask.astype(np.uint8), output)  # much faster than output[mask] = ...
         return output
 
     def save(self, path: str | Path) -> None:
@@ -152,6 +170,7 @@ class MotionHeatmap:
     def reset(self) -> None:
         """Clear all accumulated activity."""
         self._accumulator.fill(0)
+        self._cache = None
 
     def _validate_frame(self, frame: np.ndarray) -> None:
         if not isinstance(frame, np.ndarray):

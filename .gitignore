@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pt
+*.onnx
+runs/
+data/videos/*
+data/results/*
+!data/videos/.gitkeep
+!data/results/.gitkeep
+*.mp4
+*.avi
+.ipynb_checkpoints/
